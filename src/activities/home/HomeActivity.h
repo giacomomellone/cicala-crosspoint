@@ -56,9 +56,9 @@ class HomeActivity final : public Activity {
     if (idx == i++) return HomeMenuItem::LIBRARY;
     if (hasOpdsUrl && idx == i++) return HomeMenuItem::OPDS_BROWSER;
     if (idx == i++) return HomeMenuItem::FILE_TRANSFER;
-    if (idx == i++) return HomeMenuItem::SETTINGS_MENU;
+    if (idx == i) return HomeMenuItem::SETTINGS_MENU;
 #ifdef CICALA_ENABLED
-    if (idx == i) return HomeMenuItem::CICALA;
+    if (idx == i + 1) return HomeMenuItem::CICALA;
 #endif
     return HomeMenuItem::NONE;
   }
