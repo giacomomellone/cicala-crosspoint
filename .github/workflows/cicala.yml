@@ -1,0 +1,65 @@
+name: Cicala X4 Pro
+on:
+  pull_request:
+  push:
+    branches: [cicala]
+  schedule:
+    - cron: "23 6 * * *"
+  workflow_dispatch:
+    inputs:
+      check_upstream:
+        type: boolean
+        default: false
+        description: Test a temporary merge of upstream develop
+permissions:
+  contents: read
+concurrency:
+  group: cicala-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          submodules: recursive
+      - name: Test an upstream merge in the disposable checkout
+        if: github.event_name == 'schedule' || inputs.check_upstream
+        run: |
+          git remote add upstream https://github.com/crosspoint-reader/crosspoint-reader.git
+          git fetch upstream develop
+          git -c user.name=CI -c user.email=ci@localhost merge --no-commit --no-ff upstream/develop
+          git submodule update --init --recursive
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - run: pip install -r scripts/cicala/requirements.txt
+      - name: Native prerequisites
+        run: sudo apt-get update && sudo apt-get install -y libssl-dev libcurl4-openssl-dev libexpat1-dev
+      - name: Fetch the pinned public core and check the SDK patch
+        run: |
+          core="$(python scripts/cicala/dependencies.py)"
+          echo "CICALA_CORE_DIR=$core" >> "$GITHUB_ENV"
+      - name: Native regression suites
+        run: |
+          cmake -S test -B build/native -DCICALA_CORE_DIR="$CICALA_CORE_DIR" -DCICALA_BUILD_TESTS=ON
+          cmake --build build/native --parallel 2
+          ctest --test-dir build/native --output-on-failure --parallel 2
+      - name: Build the Cicala X4 Pro firmware
+        run: pio run -e cicala_release -j 2
+      - name: Keep the firmware and provenance for review
+        uses: actions/upload-artifact@v6
+        with:
+          name: cicala-x4pro-build
+          path: |
+            .pio/build/cicala_release/firmware.bin
+            .pio/build/cicala_release/firmware.factory.bin
+            .pio/build/cicala_release/cicala-provenance.json
+      - name: Keep native test results
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: cicala-native-results
+          path: build/native/Testing/Temporary/LastTest.log
+          if-no-files-found: ignore

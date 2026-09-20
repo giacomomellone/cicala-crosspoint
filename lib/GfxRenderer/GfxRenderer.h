@@ -199,6 +199,9 @@ class GfxRenderer {
   int getScreenHeight() const;
   void tapToLogical(float nx, float ny, int& outX, int& outY) const;
   void displayBuffer(HalDisplay::RefreshMode refreshMode = HalDisplay::FAST_REFRESH) const;
+#ifdef FREEINK_CHECKED_REFRESH
+  HalDisplay::RefreshResult displayBufferChecked(HalDisplay::RefreshMode refreshMode) const;
+#endif
   // One-shot: the next displayBuffer()/displayBufferAsync() call uses `mode`
   // instead of what its caller asked for, then the override clears itself.
   // Lets a closing overlay (the control center's refresh tile) hand a

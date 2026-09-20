@@ -1,0 +1,64 @@
+name: Cicala X4 Pro release
+on:
+  release:
+    types: [published]
+permissions:
+  contents: read
+jobs:
+  build:
+    if: github.repository == 'giacomomellone/cicala-crosspoint' && !github.event.release.prerelease
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.release.tag_name }}
+          fetch-depth: 0
+          submodules: recursive
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - run: pip install -r scripts/cicala/requirements.txt
+      - name: Check the independent fork version
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          python - <<'PY'
+          import configparser, os
+          config = configparser.ConfigParser()
+          config.read('platformio.cicala.ini')
+          assert os.environ['RELEASE_TAG'] == config['cicala']['version']
+          PY
+      - name: Build the pinned sources
+        env:
+          CICALA_RELEASE_BUILD: "1"
+        run: pio run -e cicala_release -j 2
+      - name: Native release checks
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libssl-dev libcurl4-openssl-dev libexpat1-dev
+          core="$(python scripts/cicala/dependencies.py)"
+          cmake -S test -B build/native -DCICALA_CORE_DIR="$core" -DCICALA_BUILD_TESTS=ON
+          cmake --build build/native --parallel 2
+          ctest --test-dir build/native --output-on-failure --parallel 2
+      - name: Stage checked release artifacts
+        run: python scripts/cicala/stage_release.py
+      - uses: actions/upload-artifact@v6
+        with:
+          name: cicala-release
+          path: build/cicala-release/*
+          if-no-files-found: error
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: cicala-release
+          path: dist
+      - name: Attach artifacts to the requested release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: gh release upload "$RELEASE_TAG" dist/* --repo "$GITHUB_REPOSITORY"

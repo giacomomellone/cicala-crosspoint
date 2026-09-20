@@ -1,0 +1,10 @@
+find_package(OpenSSL REQUIRED)
+find_package(CURL REQUIRED)
+find_package(Python3 REQUIRED COMPONENTS Interpreter)
+add_subdirectory(${CICALA_CORE_DIR} ${CMAKE_CURRENT_BINARY_DIR}/core)
+add_executable(CicalaStoreTest StoreTest.cpp HostAdapters.cpp ${REPO_ROOT}/src/cicala/CicalaStore.cpp)
+target_compile_definitions(CicalaStoreTest PRIVATE CICALA_ENABLED=1 "CICALA_MANIFEST_URL=testManifestUrl()")
+target_include_directories(CicalaStoreTest BEFORE PRIVATE stubs ${REPO_ROOT}/src ${REPO_ROOT}/lib/Memory)
+target_link_libraries(CicalaStoreTest PRIVATE cicala_core OpenSSL::Crypto CURL::libcurl)
+add_test(NAME cicala_store_http COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/run_store_test.py
+  $<TARGET_FILE:CicalaStoreTest> ${CICALA_CORE_DIR}/tests/fixtures/en.qdb)

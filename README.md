@@ -1,5 +1,11 @@
 # CrossPoint Reader
 
+This is the **Cicala X4 Pro fork**. It adds conversation questions to the Home menu,
+manual signed question updates, and sessions retained on SD. See the
+[Cicala build and development guide](docs/cicala.md) for the `cicala` target,
+core package setup, independent OTA releases, and device verification status.
+The upstream CrossPoint project and its features are described below.
+
 [![Fund contributors](https://img.shields.io/badge/%F0%9F%91%91_Fund_contributors-royalty.dev-BB953A?style=for-the-badge&labelColor=1a1a1a)](https://app.royalty.dev/crosspoint-reader/crosspoint-reader)
 
 CrossPoint is open-source e-reader firmware - community-built, fully hackable, free forever. It's maintained by a growing community of developers and readers who believe your device should do what you want - not what a manufacturer decided for you.

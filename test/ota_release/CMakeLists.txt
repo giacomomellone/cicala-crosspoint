@@ -1,0 +1,3 @@
+add_executable(OtaReleaseTest OtaReleaseTest.cpp)
+target_link_libraries(OtaReleaseTest PRIVATE crosspoint_test_common GTest::gtest_main)
+gtest_discover_tests(OtaReleaseTest)

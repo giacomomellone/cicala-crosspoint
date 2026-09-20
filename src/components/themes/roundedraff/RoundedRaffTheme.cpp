@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "RecentBooksStore.h"
+#include "cicala/CicalaLogo.h"
 #include "components/UITheme.h"
 #include "components/icons/cover.h"
 #include "fontIds.h"
@@ -158,15 +159,23 @@ void RoundedRaffTheme::drawButtonMenu(GfxRenderer& renderer, Rect rect, int butt
     const std::string label = buttonLabel(i);
     const int rowY = menuTop + (i - pageStartIndex) * rowStep;
     constexpr int kRowPaddingX = 40;  // 20px L/R
-    const int maxLabelWidth = std::max(0, menuMaxWidth - kRowPaddingX);
+    int iconWidth = 0;
+#ifdef CICALA_ENABLED
+    if (rowIcon && rowIcon(i) == UIIcon::Cicala) iconWidth = 44;
+#endif
+    const int maxLabelWidth = std::max(0, menuMaxWidth - kRowPaddingX - iconWidth);
     const std::string truncatedLabel =
         renderer.truncatedText(kTitleFontId, label.c_str(), maxLabelWidth, EpdFontFamily::BOLD);
-    const int rowWidth = std::min(
-        menuMaxWidth, renderer.getTextWidth(kTitleFontId, truncatedLabel.c_str(), EpdFontFamily::BOLD) + kRowPaddingX);
+    const int rowWidth =
+        std::min(menuMaxWidth, renderer.getTextWidth(kTitleFontId, truncatedLabel.c_str(), EpdFontFamily::BOLD) +
+                                   kRowPaddingX + iconWidth);
     const bool isSelected = selectedIndex == i;
     renderer.fillRoundedRect(rowX, rowY, rowWidth, rowHeight, kMenuRadius, isSelected ? Color::Black : Color::White);
     const int textY = rowY + (rowHeight - textLineHeight) / 2;
-    const int textX = rowX + kInteractiveInsetX;
+    const int textX = rowX + kInteractiveInsetX + iconWidth;
+#ifdef CICALA_ENABLED
+    if (iconWidth) cicala_logo::draw(renderer, rowX + kInteractiveInsetX, rowY + (rowHeight - 32) / 2, 32, !isSelected);
+#endif
     if (selectedIndex == i) {
       renderer.drawText(kTitleFontId, textX, textY, truncatedLabel.c_str(), false, EpdFontFamily::BOLD);
     } else {

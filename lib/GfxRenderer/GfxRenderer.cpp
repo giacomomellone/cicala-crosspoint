@@ -2404,3 +2404,12 @@ void GfxRenderer::getOrientedViewableTRBL(int* outTop, int* outRight, int* outBo
       break;
   }
 }
+
+#ifdef FREEINK_CHECKED_REFRESH
+HalDisplay::RefreshResult GfxRenderer::displayBufferChecked(HalDisplay::RefreshMode mode) const {
+  if (!hasFrameBuffer()) return HalDisplay::RefreshResult::Unavailable;
+  display.beginCheckedRefresh();
+  displayBuffer(mode);
+  return display.endCheckedRefresh();
+}
+#endif
