@@ -1,6 +1,7 @@
 #ifdef CICALA_ENABLED
 #include "CicalaActivity.h"
 
+#include <HalPowerManager.h>
 #include <I18n.h>
 #include <Memory.h>
 #include <WiFi.h>
@@ -11,6 +12,7 @@
 
 #include "CrossPointSettings.h"
 #include "activities/network/WifiSelectionActivity.h"
+#include "cicala/CicalaLogo.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
 
@@ -22,6 +24,7 @@ constexpr uint32_t TOUCH_CONTACT = 1u << 31;
 bool contains(Rect rect, int x, int y) {
   return x >= rect.x && x < rect.x + rect.width && y >= rect.y && y < rect.y + rect.height;
 }
+Rect asRect(CicalaLayout::Box box) { return Rect{box.x, box.y, box.width, box.height}; }
 }  // namespace
 
 CicalaActivity::CicalaActivity(GfxRenderer& renderer, MappedInputManager& input)
@@ -58,7 +61,7 @@ void CicalaActivity::queuePaint(bool full) {
 void CicalaActivity::action(cicala::Action actionValue) {
   if (!ready || !session.prepare(actionValue)) return;
   saveAfterPaint = actionValue == cicala::Action::NewSession;
-  options = about = false;
+  options = about = confirmNew = false;
   notice = nullptr;
   queuePaint(actionValue == cicala::Action::NewSession);
 }
@@ -116,10 +119,13 @@ void CicalaActivity::prepareForSleep() {
   session.cancel();
   // ActivityManager holds RenderLock here. Preserve the committed conversation
   // view even when sleep interrupts an options page or a bundle download.
-  options = about = false;
+  options = about = confirmNew = false;
   notice = nullptr;
   renderer.clearScreen();
   drawBody(session.state());
+  const auto footer = controlBounds(0, 1);
+  renderer.fillRect(footer.x - 4, footer.y - 4, footer.width + 8, footer.height + 8, false);
+  drawWrapped(footer, SMALL_FONT_ID, tr(STR_CICALA_ASLEEP), true);
   renderer.displayBufferChecked(HalDisplay::FULL_REFRESH);
   const bool saved = store.saveSession(snapshot.play, snapshot.bag);
   CicalaStore::markResume(saved);
@@ -203,10 +209,31 @@ void CicalaActivity::loop() {
     }
     return;
   }
+  bool touchUpdate = false;
   if (tapped) {
-    const Button controls[] = {Button::Back, Button::Confirm, Button::Left, Button::Right};
-    for (int column = 0; column < 4; ++column)
-      if (contains(controlBounds(column), touchX, touchY)) accepted |= 1u << static_cast<unsigned>(controls[column]);
+    const auto& play = session.state();
+    const int count = controlCount(play);
+    for (int column = 0; column < count; ++column) {
+      if (!contains(controlBounds(column, count), touchX, touchY)) continue;
+      Button button = Button::Back;
+      if (syncing.load() || about || (options && !confirmNew && !notice) || (notice && ready)) {
+        button = Button::Back;
+      } else if (!ready) {
+        touchUpdate = column == 1;
+      } else if (confirmNew) {
+        confirmStart = column == 1;
+        button = column == 1 ? Button::Confirm : Button::Back;
+      } else if (play.menu) {
+        button = column == 1 ? Button::Confirm : Button::Back;
+      } else if (play.kind == static_cast<uint8_t>(cicala::ViewKind::Empty) && corpus.count() == 0) {
+        button = Button::Confirm;
+        touchUpdate = column == 1;
+      } else {
+        const Button controls[] = {Button::Confirm, Button::Left, Button::Right};
+        button = controls[column];
+      }
+      if (!touchUpdate) accepted |= 1u << static_cast<unsigned>(button);
+    }
   }
   if (syncing.load()) {
     if (released(Button::Back)) cancelled.store(true);
@@ -223,9 +250,22 @@ void CicalaActivity::loop() {
     return;
   }
   RenderLock lock;
+  if (touchUpdate) {
+    options = true;
+    notice = nullptr;
+    lock.unlock();
+    connectForSync();
+    return;
+  }
+  if (!ready && (notice || (!options && !about)) && released(Button::Back)) {
+    lock.unlock();
+    activityManager.goHome(HomeMenuItem::CICALA);
+    return;
+  }
   if (notice) {
     if (released(Button::Back) || released(Button::Confirm)) {
       notice = nullptr;
+      if (!ready) options = true;
       queuePaint();
     }
     return;
@@ -237,10 +277,28 @@ void CicalaActivity::loop() {
     }
     return;
   }
+  if (confirmNew) {
+    if (released(Button::Back)) {
+      confirmNew = false;
+      queuePaint();
+    } else if (released(Button::NavNext) || released(Button::NavPrevious) || released(Button::Left) ||
+               released(Button::Right)) {
+      confirmStart = !confirmStart;
+      queuePaint();
+    } else if (released(Button::Confirm)) {
+      if (confirmStart)
+        action(cicala::Action::NewSession);
+      else {
+        confirmNew = false;
+        queuePaint();
+      }
+    }
+    return;
+  }
   if (options) {
     bool activate = released(Button::Confirm);
     if (tapped) {
-      for (int row = 0; row < 4; ++row) {
+      for (int row = 0; row < 5; ++row) {
         if (contains(rowBounds(row), touchX, touchY)) {
           option = row;
           activate = true;
@@ -252,35 +310,56 @@ void CicalaActivity::loop() {
       options = false;
       queuePaint();
     } else if (released(Button::NavNext) || released(Button::Right)) {
-      option = (option + 1) % 4;
+      option = (option + 1) % 5;
       queuePaint();
     } else if (released(Button::NavPrevious) || released(Button::Left)) {
-      option = (option + 3) % 4;
+      option = (option + 4) % 5;
       queuePaint();
     } else if (activate) {
       if (option == 0) {
         options = false;
         queuePaint();
-      } else if (option == 1)
-        action(cicala::Action::NewSession);
-      else if (option == 2) {
+      } else if (option == 1) {
+        if (ready) {
+          confirmNew = true;
+          confirmStart = false;
+          queuePaint();
+        }
+      } else if (option == 2) {
         lock.unlock();
         connectForSync();
-      } else {
+      } else if (option == 3) {
         about = true;
         queuePaint();
+      } else {
+        lock.unlock();
+        activityManager.goHome(HomeMenuItem::CICALA);
       }
     }
     return;
   }
   if (tapped && session.state().menu && ready) {
-    for (int row = 0; row < 4; ++row) {
-      if (contains(rowBounds(row), touchX, touchY) && session.prepareFilterRow(row)) {
+    for (int row = 0; row < 3; ++row) {
+      if (contains(rowBounds(row, true), touchX, touchY) && session.prepareFilterRow(row)) {
         saveAfterPaint = false;
         queuePaint();
         return;
       }
     }
+  }
+  if (session.state().menu && ready) {
+    if (released(Button::Back))
+      action(cicala::Action::CancelFilters);
+    else if (released(Button::Confirm)) {
+      if (session.prepareFilterRow(3)) {
+        saveAfterPaint = false;
+        queuePaint();
+      }
+    } else if (released(Button::Right) || released(Button::PageForward))
+      action(cicala::Action::Next);
+    else if (released(Button::Left) || released(Button::PageBack))
+      action(cicala::Action::Filters);
+    return;
   }
   if (released(Button::Back)) {
     lock.unlock();
@@ -297,6 +376,7 @@ void CicalaActivity::loop() {
 
 bool CicalaActivity::layoutText(int font, int width, int height, const char* text, size_t length) {
   lineCount = 0;
+  if (length > TEXT_CAPACITY || width <= 0 || height <= 0) return false;
   size_t start = 0;
   while (start < length) {
     while (start < length && text[start] == ' ') ++start;
@@ -323,123 +403,225 @@ bool CicalaActivity::layoutText(int font, int width, int height, const char* tex
 }
 
 void CicalaActivity::drawQuestion(Rect bounds, const char* text, size_t length) {
-  int font = SETTINGS.getReaderFontId();
+  int font = NOTOSANS_18_FONT_ID;
   if (!layoutText(font, bounds.width, bounds.height, text, length)) {
-    font = UI_12_FONT_ID;
+    font = NOTOSANS_14_FONT_ID;
     if (!layoutText(font, bounds.width, bounds.height, text, length)) {
       layoutFailed = true;
-      GUI.drawHelpText(renderer, bounds, tr(STR_CICALA_TEXT_ERROR));
+      drawWrapped(bounds, UI_12_FONT_ID, tr(STR_CICALA_TEXT_ERROR), true);
       return;
     }
   }
-  int y = bounds.y + (bounds.height - static_cast<int>(lineCount) * renderer.getLineHeight(font)) / 2;
+  const int lineHeight = renderer.getLineHeight(font);
+  const int gap = lineCount > 1 && static_cast<int>(lineCount) * (lineHeight + 6) <= bounds.height ? 6 : 0;
+  int y = bounds.y + (bounds.height - static_cast<int>(lineCount) * (lineHeight + gap)) / 2;
   for (size_t line = 0; line < lineCount; ++line) {
     const size_t length = lineEnds[line] - lineStarts[line];
     memcpy(textBuffer, text + lineStarts[line], length);
     textBuffer[length] = '\0';
     UITheme::drawCenteredText(renderer, bounds, font, y, textBuffer);
-    y += renderer.getLineHeight(font);
+    y += lineHeight + gap;
   }
 }
 
-Rect CicalaActivity::controlBounds(int column) const {
-  const int height = std::max(56, 2 * renderer.getLineHeight(UI_10_FONT_ID) + 8);
-  const int step = (renderer.getScreenWidth() - 16) / 4;
-  return Rect{8 + column * step, renderer.getScreenHeight() - height - 8, step - 4, height};
+CicalaLayout CicalaActivity::layout() const {
+  auto safe = UITheme::getInstance().getScreenSafeArea(renderer, !mappedInput.hasTouch(), false);
+  int top, right, bottom, left;
+  renderer.getOrientedViewableTRBL(&top, &right, &bottom, &left);
+  const int x = std::max(safe.x, left);
+  const int y = std::max(safe.y, top);
+  return {{x, y, std::min(safe.x + safe.width, renderer.getScreenWidth() - right) - x,
+           std::min(safe.y + safe.height, renderer.getScreenHeight() - bottom) - y}};
 }
 
-Rect CicalaActivity::bodyBounds() const {
-  const auto& metrics = UITheme::getInstance().getMetrics();
-  auto bounds = UITheme::getInstance().getScreenSafeArea(renderer, !mappedInput.hasTouch(), true);
-  if (mappedInput.hasTouch()) bounds.height = controlBounds(0).y - metrics.verticalSpacing;
-  bounds.y += metrics.headerHeight + metrics.verticalSpacing;
-  bounds.height -= metrics.headerHeight + 2 * metrics.verticalSpacing;
-  bounds.x += metrics.contentSidePadding;
-  bounds.width -= 2 * metrics.contentSidePadding;
-  return bounds;
+int CicalaActivity::controlCount(const cicala::PlayState& play) const {
+  if (syncing.load() || about) return 1;
+  if (confirmNew) return 2;
+  if (options && !notice) return 1;
+  if (!ready) return 2;
+  if (notice) return 1;
+  if (play.menu || (play.kind == static_cast<uint8_t>(cicala::ViewKind::Empty) && corpus.count() == 0)) return 2;
+  return 3;
 }
 
-Rect CicalaActivity::rowBounds(int row) const {
-  const auto bounds = bodyBounds();
-  const int gap = UITheme::getInstance().getMetrics().menuSpacing;
-  const int height = std::min(std::max(56, GUI.getMenuRowHeight(renderer)), (bounds.height - 3 * gap) / 4);
-  return Rect{bounds.x, bounds.y + row * (height + gap), bounds.width, height};
+Rect CicalaActivity::controlBounds(int column, int count) const { return asRect(layout().control(column, count)); }
+Rect CicalaActivity::bodyBounds() const { return asRect(layout().body()); }
+Rect CicalaActivity::rowBounds(int row, bool filters) const { return asRect(layout().row(row, filters)); }
+
+int CicalaActivity::drawWrapped(Rect bounds, int font, const char* value, bool centered) {
+  const size_t length = strlen(value);
+  if (!layoutText(font, bounds.width, bounds.height, value, length)) {
+    font = SMALL_FONT_ID;
+    if (!layoutText(font, bounds.width, bounds.height, value, length)) return 0;
+  }
+  const int height = static_cast<int>(lineCount) * renderer.getLineHeight(font);
+  int y = bounds.y + (centered ? (bounds.height - height) / 2 : 0);
+  for (size_t line = 0; line < lineCount; ++line) {
+    const size_t count = lineEnds[line] - lineStarts[line];
+    memcpy(textBuffer, value + lineStarts[line], count);
+    textBuffer[count] = '\0';
+    if (centered)
+      UITheme::drawCenteredText(renderer, bounds, font, y, textBuffer);
+    else
+      renderer.drawText(font, bounds.x, y, textBuffer);
+    y += renderer.getLineHeight(font);
+  }
+  return height;
+}
+
+void CicalaActivity::drawHeader(const cicala::PlayState& play) {
+  const auto bounds = asRect(layout().header());
+  const bool question = !options && !about && !confirmNew && !notice && !play.menu;
+  const bool menu = options && !about && !confirmNew && !notice;
+  const int size = menu || play.menu ? 32 : 36;
+  const int y = bounds.y + (bounds.height - size) / 2;
+  cicala_logo::draw(renderer, bounds.x, y, size);
+  if (!question) {
+    const int x = bounds.x + size + 12;
+    renderer.drawText(UI_12_FONT_ID, x, bounds.y + (bounds.height - renderer.getLineHeight(UI_12_FONT_ID)) / 2,
+                      tr(STR_CICALA), true, EpdFontFamily::BOLD);
+    const char* title = menu ? tr(STR_CICALA_MENU) : play.menu ? tr(STR_CICALA_FILTERS) : nullptr;
+    if (title) {
+      const int next = x + renderer.getTextWidth(UI_12_FONT_ID, tr(STR_CICALA), EpdFontFamily::BOLD) + 24;
+      const int available = bounds.x + bounds.width - 110 - next;
+      if (renderer.getTextWidth(SMALL_FONT_ID, title) <= available)
+        renderer.drawText(SMALL_FONT_ID, next, bounds.y + (bounds.height - renderer.getLineHeight(SMALL_FONT_ID)) / 2,
+                          title);
+    }
+  }
+  const auto percentage = powerManager.getBatteryPercentage();
+  const int batteryX = bounds.x + bounds.width - 26;
+  const int batteryY = bounds.y + 28;
+  BaseTheme::drawBatteryOutline(renderer, batteryX, batteryY, 24, 12);
+  GUI.fillBatteryIcon(renderer, Rect{batteryX, batteryY, 24, 12}, percentage);
+  if (SETTINGS.hideBatteryPercentage != CrossPointSettings::HIDE_BATTERY_PERCENTAGE::HIDE_ALWAYS) {
+    char label[8];
+    snprintf(label, sizeof(label), "%u%%", static_cast<unsigned>(percentage));
+    renderer.drawText(SMALL_FONT_ID, batteryX - 12 - renderer.getTextWidth(SMALL_FONT_ID, label), batteryY - 6, label);
+  }
+  renderer.drawLine(bounds.x, bounds.y + bounds.height, bounds.x + bounds.width, bounds.y + bounds.height);
+}
+
+void CicalaActivity::drawButton(Rect bounds, const char* label, bool solid, bool selected) {
+  if (solid)
+    renderer.fillRect(bounds.x, bounds.y, bounds.width, bounds.height);
+  else
+    renderer.drawRect(bounds.x, bounds.y, bounds.width, bounds.height);
+  if (selected) renderer.drawRect(bounds.x - 3, bounds.y - 3, bounds.width + 6, bounds.height + 6, 2, true);
+  const bool next = label == tr(STR_CICALA_NEXT);
+  const int font = next ? UI_12_FONT_ID : UI_10_FONT_ID;
+  const auto style = next ? EpdFontFamily::BOLD : EpdFontFamily::REGULAR;
+  if (renderer.getTextWidth(font, label, style) <= bounds.width - 16) {
+    UITheme::drawCenteredText(renderer, bounds, font, bounds.y + (bounds.height - renderer.getLineHeight(font)) / 2,
+                              label, !solid, style);
+  } else if (layoutText(UI_10_FONT_ID, bounds.width - 16, bounds.height - 12, label, strlen(label))) {
+    int y = bounds.y + (bounds.height - static_cast<int>(lineCount) * renderer.getLineHeight(UI_10_FONT_ID)) / 2;
+    for (size_t line = 0; line < lineCount; ++line) {
+      const size_t length = lineEnds[line] - lineStarts[line];
+      memcpy(textBuffer, label + lineStarts[line], length);
+      textBuffer[length] = '\0';
+      UITheme::drawCenteredText(renderer, bounds, UI_10_FONT_ID, y, textBuffer, !solid);
+      y += renderer.getLineHeight(UI_10_FONT_ID);
+    }
+  }
+}
+
+void CicalaActivity::drawControls(const cicala::PlayState& play) {
+  const char* labels[3] = {tr(STR_CICALA_MENU), tr(STR_CICALA_FILTERS), tr(STR_CICALA_NEXT)};
+  const int count = controlCount(play);
+  bool solid = true;
+  if (syncing.load()) {
+    labels[0] = tr(STR_CICALA_CANCEL_UPDATE);
+    solid = false;
+  } else if (about || (options && !confirmNew && !notice)) {
+    labels[0] = tr(STR_BACK);
+    solid = false;
+  } else if (!ready) {
+    labels[0] = tr(STR_CICALA_HOME);
+    labels[1] = tr(STR_CICALA_UPDATE);
+  } else if (notice) {
+    labels[0] = tr(STR_BACK);
+    solid = false;
+  } else if (confirmNew) {
+    labels[0] = tr(STR_CICALA_KEEP_SESSION);
+    labels[1] = tr(STR_CICALA_START_NEW);
+  } else if (play.menu) {
+    labels[0] = tr(STR_CANCEL);
+    labels[1] = tr(STR_CICALA_APPLY);
+  } else if (count == 2)
+    labels[1] = tr(STR_CICALA_UPDATE);
+  if (mappedInput.hasTouch()) {
+    for (int i = 0; i < count; ++i) {
+      const bool selected = confirmNew ? (i == (confirmStart ? 1 : 0)) : play.menu && play.cursor == 3 && i == 1;
+      drawButton(controlBounds(i, count), labels[i], solid && i == count - 1, selected);
+    }
+  } else {
+    const bool navigating = options || confirmNew;
+    const auto hints =
+        mappedInput.mapLabels(play.menu ? tr(STR_CANCEL) : tr(STR_BACK),
+                              play.menu    ? tr(STR_CICALA_APPLY)
+                              : navigating ? tr(STR_SELECT)
+                                           : tr(STR_CICALA_MENU),
+                              navigating ? tr(STR_CICALA_PREVIOUS) : tr(STR_CICALA_FILTERS), tr(STR_CICALA_NEXT));
+    GUI.drawButtonHints(renderer, hints.btn1, hints.btn2, hints.btn3, hints.btn4);
+    GUI.drawSideButtonHints(renderer, navigating ? tr(STR_CICALA_PREVIOUS) : tr(STR_CICALA_FILTERS),
+                            tr(STR_CICALA_NEXT));
+  }
 }
 
 void CicalaActivity::drawRows(const char* const* labels, int selected) {
-  for (int row = 0; row < 4; ++row) {
+  for (int row = 0; row < 5; ++row) {
     const auto rect = rowBounds(row);
-    renderer.drawRect(rect.x, rect.y, rect.width, rect.height, 1, true);
-    if (row == selected) renderer.fillRect(rect.x, rect.y, 4, rect.height);
-    BaseTheme::drawHintLabel(renderer, UI_10_FONT_ID, labels[row], rect.x + 8, rect.width - 16, rect.y, rect.height,
-                             (rect.height - renderer.getLineHeight(UI_10_FONT_ID)) / 2);
+    renderer.drawLine(rect.x, rect.y + rect.height, rect.x + rect.width, rect.y + rect.height);
+    if (row == selected) renderer.fillRect(rect.x, rect.y + 15, 3, 28);
+    drawWrapped(Rect{rect.x + 10, rect.y + 18, rect.width - 36, rect.height - 20}, UI_10_FONT_ID, labels[row]);
+    renderer.drawText(UI_10_FONT_ID, rect.x + rect.width - 20, rect.y + 18, ">", true);
   }
 }
 
 void CicalaActivity::drawBody(const cicala::PlayState& play) {
-  const auto& metrics = UITheme::getInstance().getMetrics();
   auto bounds = bodyBounds();
-  GUI.drawHeader(
-      renderer,
-      Rect{bounds.x, bounds.y - metrics.headerHeight - metrics.verticalSpacing, bounds.width, metrics.headerHeight},
-      tr(STR_CICALA));
-  if (notice)
-    GUI.drawHelpText(renderer, bounds, notice);
-  else if (about) {
+  drawHeader(play);
+  if (notice || (!ready && !options && !about)) {
+    drawWrapped(bounds, UI_12_FONT_ID, notice ? notice : tr(STR_CICALA_CORPUS_ERROR));
+  } else if (about) {
     char info[240];
     snprintf(info, sizeof(info), tr(STR_CICALA_VERSIONS), CICALA_FIRMWARE_VERSION, CICALA_UPSTREAM_VERSION,
              CICALA_UPSTREAM_REVISION, cicala::kCoreVersion, store.installedVersion());
-    GUI.drawHelpText(renderer, bounds, info);
+    drawWrapped(bounds, UI_12_FONT_ID, info);
+  } else if (confirmNew) {
+    const int height = drawWrapped(bounds, NOTOSANS_18_FONT_ID, tr(STR_CICALA_NEW_SESSION_PROMPT));
+    bounds.y += height + 24;
+    bounds.height -= height + 24;
+    drawWrapped(bounds, UI_10_FONT_ID, tr(STR_CICALA_NEW_SESSION_DETAIL));
   } else if (options) {
-    const char* labels[] = {tr(STR_RESUME), tr(STR_CICALA_NEW_SESSION), tr(STR_CICALA_UPDATE), tr(STR_CICALA_ABOUT)};
+    const char* labels[] = {tr(STR_RESUME), tr(STR_CICALA_NEW_SESSION), tr(STR_CICALA_UPDATE), tr(STR_CICALA_ABOUT),
+                            tr(STR_CICALA_HOME)};
     drawRows(labels, option);
   } else if (play.menu) {
     const char* names[] = {tr(STR_CICALA_DARK), tr(STR_CICALA_SEXUAL), tr(STR_CICALA_HEAVY)};
-    // Reuse the member text buffer for one row at a time; no per-frame heap buffer.
-    for (int row = 0; row < 4; ++row) {
-      const auto rect = rowBounds(row);
-      renderer.drawRect(rect.x, rect.y, rect.width, rect.height, 1, true);
-      if (row == play.cursor) renderer.fillRect(rect.x, rect.y, 4, rect.height);
-      if (row < 3)
-        snprintf(textBuffer, sizeof(textBuffer), "%s: %s", names[row],
-                 (play.draft & (1u << row)) ? tr(STR_CICALA_INCLUDED) : tr(STR_CICALA_EXCLUDED));
-      else
-        snprintf(textBuffer, sizeof(textBuffer), "%s", tr(STR_DONE));
-      BaseTheme::drawHintLabel(renderer, UI_10_FONT_ID, textBuffer, rect.x + 8, rect.width - 16, rect.y, rect.height,
-                               (rect.height - renderer.getLineHeight(UI_10_FONT_ID)) / 2);
+    const char* hints[] = {tr(STR_CICALA_DARK_HINT), tr(STR_CICALA_SEXUAL_HINT), tr(STR_CICALA_HEAVY_HINT)};
+    for (int row = 0; row < 3; ++row) {
+      const auto rect = rowBounds(row, true);
+      renderer.drawLine(rect.x, rect.y + rect.height, rect.x + rect.width, rect.y + rect.height);
+      if (row == play.cursor) renderer.fillRect(rect.x, rect.y + 4, 3, rect.height - 10);
+      renderer.drawText(UI_10_FONT_ID, rect.x + 12, rect.y + 5, names[row]);
+      if (layout().portrait())
+        drawWrapped(Rect{rect.x + 12, rect.y + 40, rect.width - 62, rect.height - 44}, SMALL_FONT_ID, hints[row]);
+      const int x = rect.x + rect.width - 45;
+      renderer.drawRect(x, rect.y + 9, 28, 28);
+      if (play.draft & (1u << row)) renderer.fillRect(x + 6, rect.y + 15, 16, 16);
     }
-  } else {
-    char summary[192];
-    const auto permission = [&](int bit) {
-      return play.permissions & bit ? tr(STR_CICALA_INCLUDED) : tr(STR_CICALA_EXCLUDED);
-    };
-    snprintf(summary, sizeof(summary), "%s: %s  %s: %s  %s: %s", tr(STR_CICALA_DARK), permission(1),
-             tr(STR_CICALA_SEXUAL), permission(2), tr(STR_CICALA_HEAVY), permission(4));
-    const int footer = 3 * renderer.getLineHeight(UI_10_FONT_ID);
-    GUI.drawHelpText(renderer, Rect{bounds.x, bounds.y + bounds.height - footer, bounds.width, footer}, summary);
-    bounds.height -= footer + metrics.verticalSpacing;
-    if (play.kind == static_cast<uint8_t>(cicala::ViewKind::Empty))
-      GUI.drawHelpText(renderer, bounds, tr(STR_CICALA_EMPTY));
-    else
-      drawQuestion(bounds, play.text, play.len);
-  }
-  const bool navigating = options && !about && !notice;
-  if (mappedInput.hasTouch()) {
-    const char* labels[] = {tr(STR_BACK), navigating ? tr(STR_SELECT) : tr(STR_CICALA_OPTIONS),
-                            navigating ? tr(STR_CICALA_PREVIOUS) : tr(STR_CICALA_FILTERS), tr(STR_CICALA_NEXT)};
-    for (int column = 0; column < 4; ++column) {
-      const auto rect = controlBounds(column);
-      renderer.drawRect(rect.x, rect.y, rect.width, rect.height, 1, true);
-      BaseTheme::drawHintLabel(renderer, UI_10_FONT_ID, labels[column], rect.x + 4, rect.width - 8, rect.y, rect.height,
-                               (rect.height - renderer.getLineHeight(UI_10_FONT_ID)) / 2);
-    }
-    return;
-  }
-  const auto labels =
-      mappedInput.mapLabels(tr(STR_BACK), navigating ? tr(STR_SELECT) : tr(STR_CICALA_OPTIONS),
-                            navigating ? tr(STR_CICALA_PREVIOUS) : tr(STR_CICALA_FILTERS), tr(STR_CICALA_NEXT));
-  GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
-  GUI.drawSideButtonHints(renderer, tr(STR_CICALA_FILTERS), tr(STR_CICALA_NEXT));
+  } else if (play.kind == static_cast<uint8_t>(cicala::ViewKind::Empty)) {
+    const bool empty = corpus.count() == 0;
+    const int height =
+        drawWrapped(bounds, NOTOSANS_18_FONT_ID, empty ? tr(STR_CICALA_EMPTY_COLLECTION) : tr(STR_CICALA_EMPTY_POOL));
+    bounds.y += height + 24;
+    bounds.height -= height + 24;
+    drawWrapped(bounds, UI_10_FONT_ID, empty ? tr(STR_CICALA_EMPTY_COLLECTION_DETAIL) : tr(STR_CICALA_EMPTY));
+  } else
+    drawQuestion(asRect(layout().question()), play.text, play.len);
+  drawControls(play);
 }
 
 void CicalaActivity::render(RenderLock&& lock) {

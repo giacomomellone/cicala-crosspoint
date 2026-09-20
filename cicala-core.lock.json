@@ -1,7 +1,7 @@
 {
   "url": "https://github.com/giacomomellone/cicala/releases/download/core-0.1.0/cicala-core-0.1.0.tar.gz",
-  "sha256": "dc1f0937cffcaa496b51d5696b54f13851d7e7fb73a24e5d9c4a6e8a94414830",
+  "sha256": "021077fddb4874b79ce4c8ce7e33688e8ca437ad48a9dddd86d2f4322067aa1f",
   "sdk_revision": "ffcbb1c7a38c357c4a37deb68c0c6dceadc50768",
   "upstream_revision": "ce2b4fcd3f1f8f7138bd0f68414162f61cb99583",
-  "source_revision": "c874082a226378ec970b37c370e6ee1fe35a4882"
+  "source_revision": "df61b273e9765f84878bf6470bb55f485ba69f58"
 }

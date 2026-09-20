@@ -6,6 +6,7 @@
 
 #include "activities/Activity.h"
 #include "cicala/CicalaInputGate.h"
+#include "cicala/CicalaLayout.h"
 #include "cicala/CicalaStore.h"
 
 struct Rect;
@@ -31,10 +32,16 @@ class CicalaActivity final : public Activity {
   void finishPaint();
   void action(cicala::Action action);
   bool reloadCorpus();
+  CicalaLayout layout() const;
   Rect bodyBounds() const;
-  Rect controlBounds(int column) const;
-  Rect rowBounds(int row) const;
+  int controlCount(const cicala::PlayState& play) const;
+  Rect controlBounds(int column, int count) const;
+  Rect rowBounds(int row, bool filters = false) const;
   void drawRows(const char* const* labels, int selected);
+  void drawHeader(const cicala::PlayState& play);
+  void drawControls(const cicala::PlayState& play);
+  void drawButton(Rect bounds, const char* label, bool solid = false, bool selected = false);
+  int drawWrapped(Rect bounds, int font, const char* text, bool centered = false);
   void drawBody(const cicala::PlayState& play);
   bool layoutText(int font, int width, int height, const char* text, size_t length);
   void drawQuestion(Rect bounds, const char* text, size_t length);
@@ -58,6 +65,8 @@ class CicalaActivity final : public Activity {
   bool options = false;
   int option = 0;
   bool about = false;
+  bool confirmNew = false;
+  bool confirmStart = false;
   bool ready = false;
   bool awaitingWifi = false;
   bool ownsWifi = false;
@@ -67,9 +76,10 @@ class CicalaActivity final : public Activity {
   CicalaStore::SyncResult syncResult = CicalaStore::SyncResult::Failed;
   TaskHandle_t worker = nullptr;
   const char* notice = nullptr;
-  char textBuffer[cicala::kMaxQuestionBytes + 1]{};
-  uint8_t lineStarts[cicala::kMaxQuestionBytes]{};
-  uint8_t lineEnds[cicala::kMaxQuestionBytes]{};
+  static constexpr size_t TEXT_CAPACITY = cicala::kMaxQuestionBytes > 240 ? cicala::kMaxQuestionBytes : 240;
+  char textBuffer[TEXT_CAPACITY + 1]{};
+  uint16_t lineStarts[cicala::kMaxQuestionBytes]{};
+  uint16_t lineEnds[cicala::kMaxQuestionBytes]{};
   size_t lineCount = 0;
 };
 #endif

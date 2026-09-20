@@ -14,6 +14,7 @@
 
 #include "I18n.h"
 #include "RecentBooksStore.h"
+#include "cicala/CicalaLogo.h"
 #include "components/UIScale.h"
 #include "components/UITheme.h"
 #include "components/UIThemeTokens.h"
@@ -686,7 +687,14 @@ void BaseTheme::drawButtonMenu(GfxRenderer& renderer, Rect rect, int buttonCount
     std::string labelStr = buttonLabel(i);
     const char* label = labelStr.c_str();
     const int textWidth = renderer.getTextWidth(UI_10_FONT_ID, label);
-    const int textX = rect.x + (rect.width - textWidth) / 2;
+    int textX = rect.x + (rect.width - textWidth) / 2;
+#ifdef CICALA_ENABLED
+    if (rowIcon && rowIcon(i) == UIIcon::Cicala) {
+      const int x = rect.x + (rect.width - textWidth - 44) / 2;
+      cicala_logo::draw(renderer, x, tileY + (BaseMetrics::values.menuRowHeight - 32) / 2, 32, !selected);
+      textX = x + 44;
+    }
+#endif
     const int lineHeight = renderer.getLineHeight(UI_10_FONT_ID);
     const int textY =
         tileY + (BaseMetrics::values.menuRowHeight - lineHeight) / 2;  // vertically centered assuming y is top of text

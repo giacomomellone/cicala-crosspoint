@@ -135,7 +135,10 @@ enum UIIcon {
   Hotspot,
   Bookmark,
   Usb,
-  Blocks
+  Blocks,
+#ifdef CICALA_ENABLED
+  Cicala,
+#endif
 };
 
 // Default theme implementation (Classic Theme)

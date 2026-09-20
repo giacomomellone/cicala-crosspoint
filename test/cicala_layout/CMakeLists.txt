@@ -1,0 +1,3 @@
+add_executable(cicala_layout_tests LayoutTest.cpp)
+target_link_libraries(cicala_layout_tests PRIVATE crosspoint_test_common GTest::gtest_main)
+gtest_discover_tests(cicala_layout_tests)

@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "RecentBooksStore.h"
+#include "cicala/CicalaLogo.h"
 #include "components/UITheme.h"
 #include "components/icons/blocks.h"
 #include "components/icons/book.h"
@@ -332,6 +333,12 @@ void LyraTheme::drawButtonMenu(GfxRenderer& renderer, Rect rect, int buttonCount
 
     if (rowIcon != nullptr) {
       UIIcon icon = rowIcon(i);
+#ifdef CICALA_ENABLED
+      if (icon == UIIcon::Cicala) {
+        cicala_logo::draw(renderer, textX, tileRect.y + (tileRect.height - 32) / 2, 32);
+        textX += 44;
+      }
+#endif
       const uint8_t* iconBitmap = iconForName(icon);
       if (iconBitmap != nullptr) {
         renderer.drawIcon(iconBitmap, textX, textY, mainMenuIconSize);

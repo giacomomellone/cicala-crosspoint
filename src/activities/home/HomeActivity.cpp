@@ -320,7 +320,7 @@ void HomeActivity::render(RenderLock&&) {
   menuItems.reserve(7);
   menuIcons.reserve(7);
   menuItems.push_back(tr(STR_CICALA));
-  menuIcons.push_back(Text);
+  menuIcons.push_back(Cicala);
 #endif
 
   if (hasOpdsServers) {

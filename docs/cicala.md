@@ -66,21 +66,46 @@ bootloader and partition table for initial installation.
 | Question | Next / Page Forward      | Draw the next eligible question                   |
 | Filters  | Filters / Page Back      | Move to the next row                              |
 | Filters  | Next / Page Forward      | Toggle the row, or apply Done                     |
-| Cicala   | Confirm                  | Open Resume, New session, Update questions, About |
+| Question | Confirm / Menu           | Open Resume, New session, Update questions, About, Home |
 | Options  | Previous / Next, Confirm | Choose and activate an option                     |
-| Cicala   | Back                     | Return to Home and save the session               |
+| Filters  | Back / Cancel            | Discard the draft and restore the same question   |
+| Filters  | Confirm / Apply          | Commit the draft                                 |
+| Question | Back                     | Return to Home and save the session               |
 
-On the Pro, the bottom touch buttons expose Back, Options, Filters, and Next.
-Tap an option row to activate it. Tap a filter row to toggle it, then Done to
-apply the draft. The two physical page buttons provide Filters/Next during play
-and previous/next selection in Options. CrossPoint handles the configured Home
+The Reading room layout uses centered Noto Sans 18 pt questions, with a 14 pt
+fallback for text that cannot fit. The question header shows a 36 px Cicala
+symbol alone. Home shows a smaller 32 px symbol beside the name in all three
+themes; the Cicala Menu and Filters headers use that same smaller size.
+
+On the Pro, the bottom touch buttons expose Menu, Filters, and a black Next
+button with white text. Tap a menu row to activate it. Filters has three
+permission rows and separate Cancel / Apply controls. A new session requires
+confirmation, initially focused on keeping the current session. The two
+physical page buttons provide Filters/Next during play and previous/next
+selection in Menu. CrossPoint handles the configured Home
 key and frontlight gestures. Button mapping and live orientation apply.
 Contacts begun during a refresh are discarded through their release, including
 a finger held down until the refresh finishes. A
 question enters the seen history only after a matching successful display
-result. Filters apply on Done. New session clears permissions and history.
+result. Filters apply on Apply (or the selected Done position with a page button).
+Cancel also uses the core's render-commit transaction: a failed refresh retains
+the open draft. A confirmed new session clears permissions and history.
 
-Sleep keeps the committed question or filter view visible. Normal power-off loses
+Status and version text wraps within the available area. An empty collection
+offers a question update; an empty eligible pool instead keeps Filters available.
+The layout derives its bounds from the current orientation and viewable panel
+margins. Menu rows reflow into two columns in landscape. The host layout tests
+check that controls and rows remain inside the panel without overlapping.
+
+`src/cicala/CicalaLayout.h` owns Cicala geometry; `CicalaActivity` owns rendering
+and input. Logos use 308 bytes of constant bitmap data, generated from
+`assets/cicala/mark.svg` by `python3 scripts/cicala/generate_logo.py`; run
+`./bin/clang-format-fix -g` after regeneration. The activity reuses bounded
+member buffers for wrapping, including the longer version/status strings.
+No wrapping or logo operation allocates a buffer per frame.
+
+Sleep keeps the committed question or filter view visible with a wake instruction
+in place of the touch footer. Normal power-off loses
 RAM, so the session lives under `/.crosspoint/cicala/`. Reopening after reading a
 book restores it. Sleep writes a one-shot resume marker; the next boot opens
 Cicala. Holding the right page button (Down) at boot bypasses Cicala resume; a power-button
