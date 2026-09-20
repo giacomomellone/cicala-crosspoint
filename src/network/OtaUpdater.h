@@ -31,6 +31,7 @@ class OtaUpdater {
   size_t getTotalSize() const { return totalSize; }
 
   OtaUpdater() = default;
+  static const char* getCurrentVersion();
   bool isUpdateNewer() const;
   const std::string& getLatestVersion() const;
   OtaUpdaterError checkForUpdate();

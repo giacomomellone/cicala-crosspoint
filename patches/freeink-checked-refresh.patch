@@ -1,0 +1,151 @@
+--- a/src/bus/EpdBus.h
++++ b/src/bus/EpdBus.h
+@@ -59,6 +59,9 @@
+   void rawWriteBytes(const uint8_t* d, uint16_t len);  // bulk data, transaction open
+ 
+   // Wait for a refresh/operation to finish using the configured (or given) polarity.
++  void clearWaitFailure() { _waitFailed = false; _checkedWait = true; }
++  bool waitFailed() const { return _waitFailed; }
++  void endCheckedWait() { _checkedWait = false; }
+   void waitBusy(const char* tag = nullptr);
+   void waitBusy(BusyPolarity p, const char* tag = nullptr);
+ 
+@@ -113,6 +116,8 @@
+   BusyPolarity busyPolarity() const { return _busy; }
+ 
+  private:
++  bool _waitFailed = false;
++  bool _checkedWait = false;
+   // Busy-wait hooks (see setBusyWaitHooks / setBusyWaitSliceHook)
+   static constexpr unsigned long BUSY_WAIT_HOOK_THRESHOLD_MS = 20;
+   void (*_busyWaitBeginHook)() = nullptr;
+--- a/src/bus/EpdBus.cpp
++++ b/src/bus/EpdBus.cpp
+@@ -239,7 +239,7 @@
+           _busyWaitBeginHook();
+         }
+       }
+-      if (millis() - start > 30000) break;
++      if (millis() - start > 30000) { _waitFailed = true; break; }
+     }
+   } else if (p == BusyPolarity::ActiveLow) {
+     bool busy = digitalRead(_pins.busy) == LOW;
+@@ -262,7 +262,7 @@
+             _busyWaitBeginHook();
+           }
+         }
+-        if (millis() - start > 30000) break;
++        if (millis() - start > 30000) { _waitFailed = true; break; }
+       } while (digitalRead(_pins.busy) == LOW);
+     }
+   } else if (p == BusyPolarity::UcIdleHigh) {
+@@ -273,6 +273,7 @@
+     // controller discard plane or LUT writes.
+     delay(1);
+     while (digitalRead(_pins.busy) == LOW) {
++      if (_checkedWait && millis() - start > 30000) { _waitFailed = true; break; }
+       busyIdle(longWait, LOW, 1);
+       if (!longWait && millis() - start > BUSY_WAIT_HOOK_THRESHOLD_MS) {
+         longWait = true;
+@@ -298,13 +299,13 @@
+             _busyWaitBeginHook();
+           }
+         }
+-        if (millis() - start > 30000) break;
++        if (millis() - start > 30000) { _waitFailed = true; break; }
+       }
+     }
+   }
+ 
+   if (hookFired && _busyWaitEndHook != nullptr) _busyWaitEndHook();
+-  if (p == BusyPolarity::X3TwoPhase && !x3SawLow) return;
++  if (p == BusyPolarity::X3TwoPhase && !x3SawLow) { _waitFailed = true; return; }
+ 
+   if (tag && Serial) {
+     Serial.printf("[%lu]   Wait complete: %s (%lu ms)\n", millis(), tag, millis() - start);
+@@ -328,7 +329,7 @@
+   // host is slept would be missed and the wait would stall to its 30 s timeout. The
+   // slice hook already delivers GPIO-precise wake, so the ISR path buys these hosts
+   // nothing — fall back to the hooked poll.
+-  if (_busyWaitSliceHook != nullptr) {
++  if (_busyWaitSliceHook != nullptr || !s_epdRefreshDone) {
+     // Refresh-completion context: BUSY assertion can trail MASTER_ACTIVATION
+     // by a few microseconds, and the ActiveHigh polled path (unlike ActiveLow's
+     // 100 ms grace loop, or the ISR path's 20 ms edge wait below) would fall
+@@ -342,6 +343,7 @@
+       while (digitalRead(_pins.busy) != HIGH && millis() - graceStart < 20) {
+         delayMicroseconds(200);
+       }
++      if (digitalRead(_pins.busy) != HIGH) _waitFailed = true;
+     }
+     waitBusy(tag);
+     return;
+@@ -349,10 +351,6 @@
+   // ISR-driven completion wait: sleep the task on a semaphore and wake on the
+   // exact BUSY completion edge, instead of polling every 1 ms. Falls back to
+   // polling if the semaphore could not be created.
+-  if (!s_epdRefreshDone) {
+-    waitBusy(tag);
+-    return;
+-  }
+   // Levels by polarity. CHANGE is armed so both the delayed BUSY assertion and
+   // its completion are event-driven; the task never polls during either phase.
+   const bool activeHigh = (_busy == BusyPolarity::ActiveHigh);
+@@ -369,6 +367,7 @@
+     // until an edge instead of delay(1) polling. No edge in 20 ms means the
+     // command was a no-op or its entire pulse completed before we armed.
+     if (xSemaphoreTake(s_epdRefreshDone, pdMS_TO_TICKS(20)) != pdTRUE) {
++      _waitFailed = true;
+       detachInterrupt(digitalPinToInterrupt(_pins.busy));
+       return;
+     }
+@@ -383,7 +382,7 @@
+   const bool hook = (_busyWaitBeginHook != nullptr);
+   if (hook) _busyWaitBeginHook();
+   while (digitalRead(_pins.busy) != doneLevel) {
+-    if (xSemaphoreTake(s_epdRefreshDone, pdMS_TO_TICKS(30000)) != pdTRUE) break;
++    if (xSemaphoreTake(s_epdRefreshDone, pdMS_TO_TICKS(30000)) != pdTRUE) { _waitFailed = true; break; }
+   }
+   if (hook && _busyWaitEndHook != nullptr) _busyWaitEndHook();
+ 
+--- a/include/FreeInkDisplay.h
++++ b/include/FreeInkDisplay.h
+@@ -1,4 +1,5 @@
+ #pragma once
++#define FREEINK_CHECKED_REFRESH 1
+ 
+ // FreeInk SDK — display facade.
+ //
+@@ -157,6 +158,10 @@
+   void cleanupGrayscaleWithPreviousBuffer();
+ #endif
+ 
++  enum class RefreshResult { Complete, Timeout, Unavailable };
++  // Scope a serialized display operation; read its result after the blocking refresh.
++  void beginCheckedRefresh();
++  RefreshResult endCheckedRefresh();
+   void displayBuffer(RefreshMode mode = FAST_REFRESH, bool turnOffScreen = false);
+ 
+   // Non-blocking refresh: pushes the frame, starts the panel waveform, and
+--- a/src/FreeInkDisplay.cpp
++++ b/src/FreeInkDisplay.cpp
+@@ -1077,3 +1077,19 @@
+ }
+ 
+ }  // namespace freeink
++
++void freeink::FreeInkDisplay::beginCheckedRefresh() {
++  syncPendingAsync();
++  _bus.clearWaitFailure();
++}
++
++freeink::FreeInkDisplay::RefreshResult freeink::FreeInkDisplay::endCheckedRefresh() {
++  syncPendingAsync();
++  _bus.endCheckedWait();
++  if (!_driver || !frameBuffer || _buildLent || !_driver->displayCommitted()) return RefreshResult::Unavailable;
++  if (_bus.waitFailed()) {
++    _driver->requestResync(1);
++    return RefreshResult::Timeout;
++  }
++  return RefreshResult::Complete;
++}

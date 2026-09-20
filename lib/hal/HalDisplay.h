@@ -49,6 +49,11 @@ class HalDisplay {
   void drawImageTransparent(const uint8_t* imageData, uint16_t x, uint16_t y, uint16_t w, uint16_t h,
                             bool fromProgmem = false) const;
 
+#ifdef FREEINK_CHECKED_REFRESH
+  using RefreshResult = EInkDisplay::RefreshResult;
+  void beginCheckedRefresh() { einkDisplay.beginCheckedRefresh(); }
+  RefreshResult endCheckedRefresh() { return einkDisplay.endCheckedRefresh(); }
+#endif
   void displayBuffer(RefreshMode mode = RefreshMode::FAST_REFRESH, bool turnOffScreen = false);
   // Non-blocking refresh (shadow-free): starts the panel waveform and returns
   // while the panel refreshes on its own. The framebuffer must stay untouched

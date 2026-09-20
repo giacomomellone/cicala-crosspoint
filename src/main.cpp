@@ -1,3 +1,6 @@
+#ifdef CICALA_ENABLED
+#include "cicala/CicalaStore.h"
+#endif
 #include <Arduino.h>
 #include <BoardConfig.h>
 #include <Epub.h>
@@ -266,9 +269,10 @@ void enterDeepSleep(bool fromTimeout = false) {
   // Commit to sleeping before goToSleep() runs the outgoing activity's onExit():
   // a WiFi activity would otherwise silentRestart() here and reboot instead.
   deepSleepInProgress = true;
-  activityManager.goToSleep(fromTimeout);
+  const bool preserveScreen = activityManager.prepareForSleep();
+  if (!preserveScreen) activityManager.goToSleep(fromTimeout);
 
-  if (isQuickResumeSleep) {
+  if (isQuickResumeSleep && !preserveScreen) {
     saveSleepFrameBuffer();
   } else if (Storage.exists(SLEEP_FRAME_FILE)) {
     // A stale Quick Resume frame must not replace the selected sleep screen during wake.
@@ -404,6 +408,14 @@ void setup() {
   HalSystem::checkPanic();
 
   APP_STATE.loadFromFile();
+#ifdef CICALA_ENABLED
+  const auto cicalaResumeBypass =
+      BoardConfig::isX4Pro() ? MappedInputManager::Button::Down : MappedInputManager::Button::Back;
+  const bool resumeCicala = CicalaStore::consumeResume() && !rebootedFromPanic && !recoveryFirmwareMode &&
+                            !mappedInputManager.isPressed(cicalaResumeBypass);
+#else
+  constexpr bool resumeCicala = false;
+#endif
   const bool isSleepWake = wakeupReason == HalGPIO::WakeupReason::PowerButton;
   const bool isPersistedSleepWake = isSleepWake && !APP_STATE.showBootScreen;
 
@@ -480,9 +492,9 @@ void setup() {
   // retained frame and input dispatches against a visible UI.
   // Only a verified deep-sleep wake may use the one-shot persisted flag.
   // Otherwise a stale flag could suppress the splash on a cold boot.
-  const BootResume resume = isSilentReboot         ? BootResume::Silent
-                            : isPersistedSleepWake ? BootResume::SplashlessWake
-                                                   : BootResume::Splash;
+  const BootResume resume = isSilentReboot                           ? BootResume::Silent
+                            : (isPersistedSleepWake || resumeCicala) ? BootResume::SplashlessWake
+                                                                     : BootResume::Splash;
   bool allowFastInitialReaderRefresh = false;
   bool needsWakeRefresh = false;
 
@@ -499,6 +511,7 @@ void setup() {
       // us in a splashless-with-no-frame loop on the next boot.
       APP_STATE.showBootScreen = true;
       APP_STATE.saveToFile();
+      if (resumeCicala) break;
       if (Storage.exists(SLEEP_FRAME_FILE) && loadSleepFrameBuffer()) {
         const bool useDifferentialRefresh = gpio.deviceIsX3();
         if (useDifferentialRefresh) {
@@ -536,6 +549,10 @@ void setup() {
   } else if (rebootedFromPanic) {
     // If we rebooted from a panic, go to crash report screen to show the panic info
     activityManager.goToCrashReport();
+#ifdef CICALA_ENABLED
+  } else if (resumeCicala) {
+    activityManager.goToCicala();
+#endif
   } else if (resume == BootResume::Silent && snapshotTarget == SILENT_REBOOT_TARGET_READER &&
              !APP_STATE.openEpubPath.empty()) {
     activityManager.goToReader(APP_STATE.openEpubPath);

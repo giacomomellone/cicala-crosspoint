@@ -1,0 +1,3 @@
+add_executable(CicalaInputTest InputGateTest.cpp)
+target_link_libraries(CicalaInputTest PRIVATE crosspoint_test_common GTest::gtest_main)
+gtest_discover_tests(CicalaInputTest)

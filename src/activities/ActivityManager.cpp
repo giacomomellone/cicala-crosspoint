@@ -1,4 +1,7 @@
 #include "ActivityManager.h"
+#ifdef CICALA_ENABLED
+#include "cicala/CicalaActivity.h"
+#endif
 
 #include <BoardConfig.h>
 #include <FontCacheManager.h>
@@ -439,3 +442,20 @@ void RenderLock::unlock() {
  *
  */
 bool RenderLock::peek() { return xQueuePeek(activityManager.renderingMutex, NULL, 0) != pdTRUE; };
+
+bool ActivityManager::prepareForSleep() {
+  RenderLock lock;
+  if (currentActivity) currentActivity->prepareForSleep();
+  for (auto it = stackActivities.rbegin(); it != stackActivities.rend(); ++it) (*it)->prepareForSleep();
+  return currentActivity && currentActivity->preserveScreenOnSleep();
+}
+#ifdef CICALA_ENABLED
+void ActivityManager::goToCicala() {
+  auto activity = makeUniqueNoThrow<CicalaActivity>(renderer, mappedInput);
+  if (!activity) {
+    LOG_ERR("ACT", "No memory for Cicala");
+    return;
+  }
+  replaceActivity(std::move(activity));
+}
+#endif
